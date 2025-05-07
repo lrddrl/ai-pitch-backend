@@ -1,13 +1,17 @@
 from fastapi import FastAPI, Response, status, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 import fitz  # PyMuPDF
+import os
 
 app = FastAPI()
+
+FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "*")
 
 # Allow CORS for any origin (for Vercel frontend access)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # TIP: In production, replace with frontend domain like ["https://yourapp.vercel.app"]
+    allow_origins=[FRONTEND_ORIGIN],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
