@@ -53,31 +53,50 @@ def fix_json(json_str):
 
 def score_pitch_with_openai(pitch):
     prompt = f"""
-    Read the following startup pitch and assign CFA scores (A+ to C-) for each of the 8 CFA factors listed.
-    Provide a one-line justification for each score.
+    You are an expert investment analyst evaluating an early-stage startup pitch.
+    Please score the startup on the following 10 factors on a scale from 1 (lowest) to 10 (highest):
+    1. Leadership
+    2. Market Size & Product-Market Fit
+    3. Technology & Intellectual Property (IP)
+    4. Competition & Moat
+    5. Deal Terms & Valuation
+    6. Financials
+    7. Traction
+    8. FDA Approval (if applicable, otherwise mark N/A)
+    9. Go-to-Market Strategy
+    10. Exit Potential
+
+    Additionally, assess Risk separately (Low, Medium, High) and adjust each category score if needed based on risk factors.
+    Provide color coding for each category score: Green (score 8-10), Yellow (5-7), Red (1-4).
+    
+    For each factor, return a JSON object with:
+    - "Score": integer 1 to 10 or "N/A" if not applicable,
+    - "Color": "Green", "Yellow", or "Red",
+    - "Justification": one concise sentence explaining the score.
+
+    Also include a top-level "OverallRisk" field with one of ["Low", "Medium", "High"].
+
+    Your output must be strictly valid JSON, no extra text, keys and strings in double quotes.
 
     Startup Pitch:
     {pitch}
 
-    IMPORTANT: Only return valid JSON, with all keys and string values in double quotes, no comments or extra text.
-    Output format as JSON:
+    JSON output format example:
     {{
-      "Features & Benefits": {{"Grade": "", "Justification": ""}},
-      "Readiness": {{"Grade": "", "Justification": ""}},
-      "Barrier to Entry": {{"Grade": "", "Justification": ""}},
-      "Adoption Potential": {{"Grade": "", "Justification": ""}},
-      "Supply Chain": {{"Grade": "", "Justification": ""}},
-      "Market Size": {{"Grade": "", "Justification": ""}},
-      "Entrepreneur Experience": {{"Grade": "", "Justification": ""}},
-      "Financial Expectations": {{"Grade": "", "Justification": ""}}
+      "Leadership": {{"Score": 7, "Color": "Yellow", "Justification": "Experienced founder with strong vision but limited team."}},
+      "Market Size & Product-Market Fit": {{"Score": 8, "Color": "Green", "Justification": "Large growing market with clear demand."}},
+      ...
+      "Exit Potential": {{"Score": 6, "Color": "Yellow", "Justification": "Potential acquirers identified but revenue still low."}},
+      "Risk": "Medium"
     }}
     """
 
     client = openai.OpenAI(api_key=OPENAI_API_KEY)
     response = client.chat.completions.create(
-        model="gpt-3.5-turbo",  # Change to gpt-4-turbo if you have access
+         model="gpt-4.1-nano-2025-04-14", 
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.3
+        temperature=0.3,
+        max_tokens=1000
     )
     content = response.choices[0].message.content
     print("GPT returned:", content)
@@ -94,21 +113,32 @@ def score_pitch_with_openai(pitch):
         else:
             raise
 
+
 @app.post("/score")
 async def score_pdf(file: UploadFile = File(...)):
     try:
         contents = await file.read()
-        print("PDF uploaded, size:", len(contents))
         with open("temp.pdf", "wb") as f:
             f.write(contents)
         doc = fitz.open("temp.pdf")
-        text = "\n".join(page.get_text() for page in doc)
-        print("Extracted text length:", len(text))
-        if len(text.strip()) < 100:
+        full_text = "\n".join(page.get_text() for page in doc)
+
+        if len(full_text.strip()) < 100:
             return {"error": "Extracted text too short. Please upload a valid business plan PDF."}
-        result = score_pitch_with_openai(text)
-        print("Score result:", result)
-        return result
+
+        scores = score_pitch_with_openai(full_text)
+
+        preview_length = 100
+        preview_text = full_text[:preview_length] + ("..." if len(full_text) > preview_length else "")
+
+        return {
+            "scores": scores,
+            "preview_text": preview_text,
+            "preview_text_full": full_text,
+            "Risk": scores.get("Risk") or scores.get("OverallRisk") or "N/A"
+        }
     except Exception as e:
         traceback.print_exc()
         return Response(content=json.dumps({"error": str(e)}), media_type="application/json", status_code=500)
+
+
