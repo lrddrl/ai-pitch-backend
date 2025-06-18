@@ -6,7 +6,15 @@ import os
 import json
 import openai
 import re
-import traceback
+import traceback 
+import pandas as pd
+from sqlalchemy import create_engine
+
+# from db import init_db, save_score_to_db    
+
+def get_engine():
+    DATABASE_URL = "postgresql://postgres:152535@localhost:5432/ai_pitch_db"
+    return create_engine(DATABASE_URL)
 
 # Load environment variables
 load_dotenv()
@@ -34,6 +42,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# @app.lifespan ("startup")
+# def on_startup():
+#     init_db()  
 
 @app.get("/")
 def read_root():
@@ -176,6 +188,9 @@ def score_pitch_with_openai(pitch):
 async def score_pdf(file: UploadFile = File(...)):
     try:
         contents = await file.read()
+
+        # add ocr later         
+
         with open("temp.pdf", "wb") as f:
             f.write(contents)
         doc = fitz.open("temp.pdf")
@@ -185,6 +200,8 @@ async def score_pdf(file: UploadFile = File(...)):
             return {"error": "Extracted text too short. Please upload a valid business plan PDF."}
 
         scores = score_pitch_with_openai(full_text)
+
+        # save_score_to_db(full_text, scores)
 
         preview_length = 100
         preview_text = full_text[:preview_length] + ("..." if len(full_text) > preview_length else "")
@@ -228,3 +245,73 @@ async def generate_analysis_report(request: Request):
     except Exception as e:
         return {"error": str(e)}
 
+
+@app.post("/macro_risk_analysis")
+async def macro_risk_analysis(request: Request):
+    try:
+        body = await request.json()
+        startup_text = body.get("startup_text", "")
+
+        engine = get_engine()
+        sql = """
+        SELECT indicator, period, value, source FROM public.macro_trends
+        WHERE country = 'USA'
+        ORDER BY period DESC
+        LIMIT 12;
+        """
+        df = pd.read_sql(sql, engine)
+
+
+        macro_data_str = df.to_csv(index=False)
+        macro_prompt = f"""
+        What macro-level risks could impact this startup, including political, technical, environmental, or ESG factors?
+        Here is the startup description:
+        {startup_text}
+
+        Here are the latest USA macro trends (last 12 months, from OECD data):
+
+        {macro_data_str}
+
+        Based on this data, provide an expert-level analysis of potential macro risks (political, economic, technical, regulatory, ESG, environmental, etc) that may affect the business, with concrete examples and suggestions.
+        Output in fluent English with clear sections for each risk type.
+        """
+
+        client = openai.OpenAI(api_key=OPENAI_API_KEY)
+        response = client.chat.completions.create(
+            model="gpt-4.1-nano-2025-04-14",
+            messages=[{"role": "user", "content": macro_prompt}],
+            temperature=0.4,
+            max_tokens=1024
+        )
+        content = response.choices[0].message.content
+        return {"analysis": content}
+    except Exception as e:
+        traceback.print_exc()
+        return {"error": str(e)}
+
+
+def analyze_subjectivity(df):
+    # Calculate standard deviation of scores per evaluator and category
+    subjectivity = df.groupby(['evaluator_id', 'category'])['score'].std().unstack().fillna(0)
+    
+    # Calculate absolute deviation from group mean per score
+    group_avg = df.groupby(['startup_id', 'category'])['score'].mean().reset_index()
+    df_merged = df.merge(group_avg, on=['startup_id', 'category'], suffixes=('', '_avg'))
+    df_merged['abs_dev'] = abs(df_merged['score'] - df_merged['score_avg'])
+    
+    # Mean absolute deviation per evaluator (summary of subjectivity)
+    subjectivity_summary = df_merged.groupby('evaluator_id')['abs_dev'].mean()
+    
+    return subjectivity.to_dict(), subjectivity_summary.to_dict()
+
+def analyze_rubric_inconsistency(df):
+    # Pivot scores: evaluators x categories
+    pivot = df.pivot_table(index='evaluator_id', columns='category', values='score', aggfunc='mean')
+    
+    # Calculate deviation from each category mean
+    rubric_drift = pivot.apply(lambda x: x - x.mean(), axis=0)
+    
+    # Average absolute deviation per evaluator
+    rubric_drift_avg = rubric_drift.abs().mean(axis=1)
+    
+    return rubric_drift.to_dict(), rubric_drift_avg.to_dict()

@@ -1,6 +1,15 @@
-fastapi
-uvicorn
-python-multipart
-pymupdf
-dotenv
-openai
+    fastapi
+    uvicorn
+    python-multipart
+    pymupdf
+    dotenv
+    openai
+    psycopg2-binary
+    databases[asyncpg] 
+    sqlalchemy 
+    asyncpg
+    pandas
+    jiter
+    pandasdmx
+    pydantic<2.0
+    openpyxl
