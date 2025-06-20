@@ -73,6 +73,8 @@ def score_pitch_with_openai(pitch):
     prompt = f"""
     You are an expert investment analyst. Evaluate the following 10 criteria using a scale from 1 (worst) to 10 (best).
 
+    Only score based on the following text content. If text is insufficient, give zero or lowest score
+
 
     Scoring guide:
     - 1-2: Very Bad
@@ -190,14 +192,37 @@ def score_pitch_with_openai(pitch):
             raise
 
 
+def normalize_score_keys(scores: dict) -> dict:
+
+    key_map = {
+    "Leadership": "Leadership",
+    "Financials": "Financials",
+    "MarketSize": "Market Size & Product-Market Fit",
+    "GTMStrategy": "GTM Strategy",
+    "TechnologyIP": "Technology/IP",
+    "ExitPotential": "Exit Potential",
+    "Competition": "Competition",
+    "Risk": "Risk",
+    "DealTerms": "Deal Terms",
+    "Traction": "Traction",
+    "Macro-Level Risk": "Macro-Level Risk"
+        }
+
+
+    normalized = {}
+    for k, v in scores.items():
+        new_key = key_map.get(k, k)
+        normalized[new_key] = v
+    return normalized
+
+
 @app.post("/score")
 async def score_endpoint(
     request: Request,
-    file: UploadFile = File(None)  # 这里File(None)表示文件可选
+    file: UploadFile = File(None)
 ):
     try:
         if file is not None:
-            # 处理上传的PDF文件，原有逻辑不变
             contents = await file.read()
             with open("temp.pdf", "wb") as f:
                 f.write(contents)
@@ -218,6 +243,8 @@ async def score_endpoint(
                 return JSONResponse({"error": "No valid text content provided for scoring."}, status_code=400)
 
         scores = score_pitch_with_openai(full_text)
+        scores = normalize_score_keys(scores) 
+
         preview_length = 100
         preview_text = full_text[:preview_length] + ("..." if len(full_text) > preview_length else "")
 
@@ -240,15 +267,67 @@ async def generate_analysis_report(request: Request):
         scores = body.get("scores")
         project_text = body.get("project_text")
         prompt = f"""
-        You are a professional VC investment analyst. Based on the following project description and factor scoring, write a detailed, structured, and insight-driven investment analysis report in fluent English, with sections for Executive Summary, Elevator Pitch, Weighted Scoring Table, Category Breakdown (strengths, concerns, suggestions), Risk Catalog, Strategic Questions for CEO, and Final Recommendation. 
-        Project Description:
-        {project_text}
+            You are a professional VC investment analyst. Based on the following project description and factor scoring, generate a detailed investment analysis report in JSON format strictly following this schema:
 
-        Factor Scoring (JSON):
-        {json.dumps(scores, indent=2)}
+            {{
+            "summary": {{
+                "companyName": "string",
+                "website": "string",
+                "ceo": "string",
+                "founded": "string",
+                "businessModel": "string",
+                "dealStructure": "string",
+                "askValuation": "string",
+                "revenueStreams": "string"
+            }},
+            "categories": [
+                {{
+                "category": "string",
+                "description": "string",
+                "strengths": "string",
+                "concerns": "string",
+                "score": 0,
+                "weight": "string",
+                "weightedScore": 0.0
+                }}
+            ],
+            "totalWeightedScore": 0.0,
+            "competitiveLandscape": [
+                {{
+                "competitor": "string",
+                "description": "string",
+                "differentiator": "string"
+                }}
+            ],
+            "riskNote": "string",
+            "recommendations": [
+                {{
+                "title": "string",
+                "items": ["string"]
+                }}
+            ],
+            "keyQuestions": {{
+                "marketStrategy": ["string"],
+                "defensibility": ["string"],
+                "financials": ["string"],
+                "productDevelopment": ["string"],
+                "exitStrategy": ["string"]
+            }},
+            "conclusion": "string",
+            "recommendation": "string"
+            }}
 
-        Use clear titles and emojis as in the following example, and provide actionable suggestions for improvement.
-        """
+            Fill out all fields based on the following project description and scoring data:
+
+            Project Description:
+            {project_text}
+
+            Factor Scoring:
+            {json.dumps(scores)}
+
+            Return only JSON content without any explanation or comments.
+            """
+
         client = openai.OpenAI(api_key=OPENAI_API_KEY)
         response = client.chat.completions.create(
             model="gpt-4.1-nano-2025-04-14",
@@ -257,7 +336,8 @@ async def generate_analysis_report(request: Request):
             max_tokens=2048
         )
         content = response.choices[0].message.content
-        return {"report": content}
+        report_json = json.loads(content)
+        return report_json
     except Exception as e:
         return {"error": str(e)}
 
