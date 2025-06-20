@@ -11,6 +11,7 @@ import pandas as pd
 from sqlalchemy import create_engine
 from pdf2image import convert_from_path
 import pytesseract
+from fastapi.responses import JSONResponse
 
 
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
@@ -190,29 +191,33 @@ def score_pitch_with_openai(pitch):
 
 
 @app.post("/score")
-async def score_pdf(file: UploadFile = File(...)):
+async def score_endpoint(
+    request: Request,
+    file: UploadFile = File(None)  # 这里File(None)表示文件可选
+):
     try:
-        contents = await file.read()
-
-        with open("temp.pdf", "wb") as f:
-            f.write(contents)
-
-        doc = fitz.open("temp.pdf")
-        full_text = "\n".join(page.get_text() for page in doc)
-
-        if len(full_text.strip()) < 100:
-            # images = convert_from_path("temp.pdf")
-            images = convert_from_path("temp.pdf", poppler_path=r"C:\poppler-24.08.0\Library\bin")
-            ocr_text = ""
-            for img in images:
-                ocr_text += pytesseract.image_to_string(img)
-            full_text = ocr_text
-
-        if len(full_text.strip()) < 100:
-            return {"error": "Extracted text too short. Please upload a valid business plan PDF."}
+        if file is not None:
+            # 处理上传的PDF文件，原有逻辑不变
+            contents = await file.read()
+            with open("temp.pdf", "wb") as f:
+                f.write(contents)
+            doc = fitz.open("temp.pdf")
+            full_text = "\n".join(page.get_text() for page in doc)
+            if len(full_text.strip()) < 100:
+                images = convert_from_path("temp.pdf", poppler_path=r"C:\poppler-24.08.0\Library\bin")
+                ocr_text = ""
+                for img in images:
+                    ocr_text += pytesseract.image_to_string(img)
+                full_text = ocr_text
+            if len(full_text.strip()) < 100:
+                return JSONResponse({"error": "Extracted text too short. Please upload a valid business plan PDF."}, status_code=400)
+        else:
+            body = await request.json()
+            full_text = body.get("text") or body.get("answers_text") or ""
+            if not full_text or len(full_text.strip()) < 50:
+                return JSONResponse({"error": "No valid text content provided for scoring."}, status_code=400)
 
         scores = score_pitch_with_openai(full_text)
-
         preview_length = 100
         preview_text = full_text[:preview_length] + ("..." if len(full_text) > preview_length else "")
 
@@ -224,11 +229,7 @@ async def score_pdf(file: UploadFile = File(...)):
 
     except Exception as e:
         traceback.print_exc()
-        return Response(
-            content=json.dumps({"error": str(e)}),
-            media_type="application/json",
-            status_code=500
-        )
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 #generate report
