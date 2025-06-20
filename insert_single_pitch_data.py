@@ -19,7 +19,6 @@ pitch_deck_scores = sqlalchemy.Table(
     sqlalchemy.Column("evaluated_at", sqlalchemy.TIMESTAMP),
 )
 
-# 假数据，针对单个pitch deck，10个打分规则
 fake_pitch_data = [
     {"factor": "Features & Benefits", "score": 8, "justification": "Strong features."},
     {"factor": "Readiness", "score": 7, "justification": "Market readiness is good."},

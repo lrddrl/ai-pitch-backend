@@ -13,3 +13,5 @@
     pandasdmx
     pydantic<2.0
     openpyxl
+    pdf2image
+    pytesseract

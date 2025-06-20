@@ -9,6 +9,11 @@ import re
 import traceback 
 import pandas as pd
 from sqlalchemy import create_engine
+from pdf2image import convert_from_path
+import pytesseract
+
+
+pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
 # from db import init_db, save_score_to_db    
 
@@ -44,8 +49,8 @@ app.add_middleware(
 )
 
 # @app.lifespan ("startup")
-# def on_startup():
-#     init_db()  
+def on_startup():
+    init_db()  
 
 @app.get("/")
 def read_root():
@@ -189,19 +194,24 @@ async def score_pdf(file: UploadFile = File(...)):
     try:
         contents = await file.read()
 
-        # add ocr later         
-
         with open("temp.pdf", "wb") as f:
             f.write(contents)
+
         doc = fitz.open("temp.pdf")
         full_text = "\n".join(page.get_text() for page in doc)
+
+        if len(full_text.strip()) < 100:
+            # images = convert_from_path("temp.pdf")
+            images = convert_from_path("temp.pdf", poppler_path=r"C:\poppler-24.08.0\Library\bin")
+            ocr_text = ""
+            for img in images:
+                ocr_text += pytesseract.image_to_string(img)
+            full_text = ocr_text
 
         if len(full_text.strip()) < 100:
             return {"error": "Extracted text too short. Please upload a valid business plan PDF."}
 
         scores = score_pitch_with_openai(full_text)
-
-        # save_score_to_db(full_text, scores)
 
         preview_length = 100
         preview_text = full_text[:preview_length] + ("..." if len(full_text) > preview_length else "")
@@ -211,9 +221,14 @@ async def score_pdf(file: UploadFile = File(...)):
             "preview_text": preview_text,
             "preview_text_full": full_text,
         }
+
     except Exception as e:
         traceback.print_exc()
-        return Response(content=json.dumps({"error": str(e)}), media_type="application/json", status_code=500)
+        return Response(
+            content=json.dumps({"error": str(e)}),
+            media_type="application/json",
+            status_code=500
+        )
 
 
 #generate report
