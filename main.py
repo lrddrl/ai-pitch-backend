@@ -1,3 +1,4 @@
+from typing import List
 from fastapi import FastAPI, Response, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
@@ -192,6 +193,53 @@ def score_pitch_with_openai(pitch):
             raise
 
 
+def score_pitch_simple(pitch):
+    prompt = f"""
+    You are an expert investment analyst. Evaluate the following 10 criteria using a scale from 1 (worst) to 10 (best).
+    Only score based on the following text content. If text is insufficient, give zero or lowest score.
+
+    Output ONLY a JSON object mapping each criterion to its integer score (do not include color or justification). Example:
+    {{
+      "Leadership": 7,
+      "Financials": 6,
+      "MarketSize": 8,
+      "GTMStrategy": 7,
+      "TechnologyIP": 8,
+      "ExitPotential": 6,
+      "Competition": 7,
+      "Risk": 5,
+      "DealTerms": 5,
+      "Traction": 6
+    }}
+
+    Startup Info:
+    {pitch}
+
+    Only output the JSON object as above, with no extra text.
+    """
+    client = openai.OpenAI(api_key=OPENAI_API_KEY)
+    response = client.chat.completions.create(
+        model="gpt-4.1-nano-2025-04-14", 
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.3,
+        max_tokens=512
+    )
+    content = response.choices[0].message.content
+    print("GPT returned (simple):", content)
+    try:
+        return json.loads(content)
+    except Exception:
+        json_str = re.search(r"\{[\s\S]+\}", content)
+        if json_str:
+            try:
+                return json.loads(fix_json(json_str.group()))
+            except Exception as e:
+                print("Manual JSON fix still failed:", e)
+                raise e
+        else:
+            raise
+
+
 def normalize_score_keys(scores: dict) -> dict:
 
     key_map = {
@@ -219,44 +267,57 @@ def normalize_score_keys(scores: dict) -> dict:
 @app.post("/score")
 async def score_endpoint(
     request: Request,
-    file: UploadFile = File(None)
+    files: List[UploadFile] = File(None)
 ):
-    try:
-        if file is not None:
-            contents = await file.read()
-            with open("temp.pdf", "wb") as f:
-                f.write(contents)
-            doc = fitz.open("temp.pdf")
-            full_text = "\n".join(page.get_text() for page in doc)
-            if len(full_text.strip()) < 100:
-                images = convert_from_path("temp.pdf", poppler_path=r"C:\poppler-24.08.0\Library\bin")
-                ocr_text = ""
-                for img in images:
-                    ocr_text += pytesseract.image_to_string(img)
-                full_text = ocr_text
-            if len(full_text.strip()) < 100:
-                return JSONResponse({"error": "Extracted text too short. Please upload a valid business plan PDF."}, status_code=400)
-        else:
-            body = await request.json()
-            full_text = body.get("text") or body.get("answers_text") or ""
-            if not full_text or len(full_text.strip()) < 50:
-                return JSONResponse({"error": "No valid text content provided for scoring."}, status_code=400)
+    if files:
+        all_text = ""
+        for file in files:
+            try:
+                contents = await file.read()
+                with open("temp.pdf", "wb") as f:
+                    f.write(contents)
+                doc = fitz.open("temp.pdf")
+                full_text = "\n".join(page.get_text() for page in doc)
+                if len(full_text.strip()) < 100:
+                    images = convert_from_path("temp.pdf", poppler_path=r"C:\poppler-24.08.0\Library\bin")
+                    ocr_text = ""
+                    for img in images:
+                        ocr_text += pytesseract.image_to_string(img)
+                    full_text = ocr_text
+                all_text += "\n" + full_text
+            except Exception as e:
+                continue  
 
+        if len(all_text.strip()) < 100:
+            return JSONResponse({"error": "Extracted text too short. Please upload valid business plan PDFs."}, status_code=400)
+
+        scores = score_pitch_with_openai(all_text)
+        scores = normalize_score_keys(scores) 
+        preview_length = 100
+        preview_text = all_text[:preview_length] + ("..." if len(all_text) > preview_length else "")
+        return {
+            "scores": scores,
+            "preview_text": preview_text,
+            "preview_text_full": all_text,
+        }
+
+    try:
+        body = await request.json()
+        full_text = body.get("text") or body.get("answers_text") or ""
+        if not full_text or len(full_text.strip()) < 50:
+            return JSONResponse({"error": "No valid text content provided for scoring."}, status_code=400)
         scores = score_pitch_with_openai(full_text)
         scores = normalize_score_keys(scores) 
-
         preview_length = 100
         preview_text = full_text[:preview_length] + ("..." if len(full_text) > preview_length else "")
-
         return {
             "scores": scores,
             "preview_text": preview_text,
             "preview_text_full": full_text,
         }
-
     except Exception as e:
-        traceback.print_exc()
         return JSONResponse({"error": str(e)}, status_code=500)
+
 
 
 #generate report
@@ -387,27 +448,65 @@ async def macro_risk_analysis(request: Request):
 
 
 def analyze_subjectivity(df):
-    # Calculate standard deviation of scores per evaluator and category
     subjectivity = df.groupby(['evaluator_id', 'category'])['score'].std().unstack().fillna(0)
-    
-    # Calculate absolute deviation from group mean per score
     group_avg = df.groupby(['startup_id', 'category'])['score'].mean().reset_index()
     df_merged = df.merge(group_avg, on=['startup_id', 'category'], suffixes=('', '_avg'))
     df_merged['abs_dev'] = abs(df_merged['score'] - df_merged['score_avg'])
-    
-    # Mean absolute deviation per evaluator (summary of subjectivity)
     subjectivity_summary = df_merged.groupby('evaluator_id')['abs_dev'].mean()
-    
     return subjectivity.to_dict(), subjectivity_summary.to_dict()
 
 def analyze_rubric_inconsistency(df):
-    # Pivot scores: evaluators x categories
     pivot = df.pivot_table(index='evaluator_id', columns='category', values='score', aggfunc='mean')
-    
-    # Calculate deviation from each category mean
     rubric_drift = pivot.apply(lambda x: x - x.mean(), axis=0)
-    
-    # Average absolute deviation per evaluator
     rubric_drift_avg = rubric_drift.abs().mean(axis=1)
-    
     return rubric_drift.to_dict(), rubric_drift_avg.to_dict()
+
+@app.post("/consistency_analysis")
+async def consistency_analysis(request: Request):
+    data = await request.json()
+    score_runs = data['scoreRuns']
+    if score_runs and isinstance(score_runs[0], (int, float)):
+        score_runs = [score_runs]
+    all_scores = [score for row in score_runs for score in row]
+    if not all_scores:
+        return JSONResponse(content={"error": "No scores provided"}, status_code=400)
+    std_val = float(np.std(all_scores))
+    mean_val = float(np.mean(all_scores))
+    return JSONResponse(content={
+        "std_deviation": std_val,
+        "mean": mean_val,
+        "count": len(all_scores),
+        "consistency_comment": (
+            "Very consistent" if std_val < 1 else
+            "Moderately consistent" if std_val < 2 else
+            "Low consistency"
+        )
+    })
+
+
+@app.post("/batch_score")
+async def batch_score(request: Request):
+    try:
+        body = await request.json()
+        text = body.get("text") or body.get("answers_text") or ""
+        if not text or len(text.strip()) < 50:
+            return JSONResponse({"error": "No valid text content provided for scoring."}, status_code=400)
+
+        scores_list = []
+        for i in range(30):
+            try:
+                scores = score_pitch_simple(text)  # Use the simple version
+                numbers = [
+                    v
+                    for v in scores.values()
+                    if isinstance(v, (int, float))
+                ]
+                avg = round(sum(numbers) / len(numbers), 1) if numbers else None
+                scores_list.append(avg)
+            except Exception as e:
+                scores_list.append(None)  
+
+        return {"scores": scores_list}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+    
