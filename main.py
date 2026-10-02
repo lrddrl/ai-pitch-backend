@@ -8,6 +8,7 @@ import json
 import openai
 import re
 import traceback 
+import numpy as np
 import pandas as pd
 from sqlalchemy import create_engine
 from pdf2image import convert_from_path
@@ -49,10 +50,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# @app.lifespan ("startup")
-def on_startup():
-    init_db()  
 
 @app.get("/")
 def read_root():

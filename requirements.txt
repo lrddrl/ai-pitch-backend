@@ -9,6 +9,7 @@
     sqlalchemy 
     asyncpg
     pandas
+numpy
     jiter
     pandasdmx
     pydantic<2.0
