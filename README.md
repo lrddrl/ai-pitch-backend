@@ -1,5 +1,7 @@
 # ai-pitch-backend
 
+[![CI](https://github.com/lrddrl/ai-pitch-backend/actions/workflows/ci.yml/badge.svg)](https://github.com/lrddrl/ai-pitch-backend/actions/workflows/ci.yml)
+
 FastAPI service that scores startup pitch decks using GPT-4.1-nano across 10 VC evaluation criteria, with PDF parsing, OCR fallback, macro-risk analysis, and scoring-consistency measurement.
 
 ## Features
